@@ -1,0 +1,7 @@
+
+# 1.1.0: added options for non-gui use
+# 1.0.4: corrected to handle relative paths
+# 1.0.3: added mountiso support
+# 1.0.2: minor changes to ISO mounting
+# 1.0.1: Added --list and --listfile
+

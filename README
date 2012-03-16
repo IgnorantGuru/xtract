@@ -1,0 +1,48 @@
+README for xtract
+
+
+OVERVIEW
+
+Designed for file manager integration, xtract decompresses and extracts
+archives, and can also list archive contents. By default, an archive is
+extracted into a subfolder of the same name. Or, xtract can prompt you
+for the destination or destination parent. 
+
+Homepage & Instructions:
+    http://igurublog.wordpress.com/downloads/script-xtract/
+
+Downloads:
+    https://github.com/IgnorantGuru/xtract
+    https://github.com/IgnorantGuru/xtract/tree/master/packages
+
+Debian/Ubuntu PPA:
+    http://igurublog.wordpress.com/downloads/ppa/
+
+
+INSTALLATION
+
+To install:
+
+    wget https://github.com/IgnorantGuru/xtract/raw/master/xtract
+    sudo install xtract /usr/local/bin/xtract
+
+To remove:
+    
+    sudo rm /usr/local/bin/xtract
+
+
+LICENSE
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+

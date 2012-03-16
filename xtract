@@ -1,0 +1,605 @@
+#!/bin/bash
+# Script Name: xtract    http://igurublog.wordpress.com/downloads/script-xtract/ 
+# Requires: zenity (for gui functions)
+# Recommended: gzip xz-utils unzip bzip2 p7zip unrar sudo gksu
+# License: GNU GENERAL PUBLIC LICENSE Version 3 http://www.gnu.org/licenses/gpl-3.0.txt
+
+
+# set superuser command to use
+if [ "`sudo -V 2> /dev/null | grep "version"`" != "" ]; then
+	# sudo is available, so have gksu use sudo to prevent being prompted
+	#      for root password multiple times
+	sucmd="gksu -gS"
+else
+	# sudo is not available
+	sucmd="gksu -g"
+fi
+
+# Set custom su command here if desired: (you may also need to test and adjust
+#      how strings are passed)
+# sucmd="gksu -g"
+
+# temporary mount of ISO files here
+# Note: If mountiso script is found, that will be used instead
+tempmount=/tmp/xtract-mount.tmp
+
+# set nogui to 1 to make no-gui mode the default
+nogui=0
+
+
+#=========================================================================
+help()
+{
+	cat << EOF
+xtract version 1.1.0
+Decompresses and extracts multiple archives.  Designed for file manager
+integration.  By default, archives are extracted into a subfolder of the same
+name, in each archive's parent folder.
+Requires:    zenity (for gui functions)
+Recommended: gzip xz-utils unzip bzip2 p7zip unrar
+Recognized filetypes: .gz .bz2 .7z .xz .txz .tgz .zip .ZIP .rar .RAR
+                      .iso .ISO .tar .tar.gz .tar.xz .tar.bz2 .tar.7z
+Usage: xtract [OPTIONS] ARCHIVE ...
+OPTIONS:
+--ask            show zenity gui prompt for destination parent and create
+                 auto-named subfolders (This is the default if the user has
+                 no write permission in archive parent folder)
+
+--combine        use zenity gui prompt for destination folder and extract all
+                 archives to this one folder (overwrites existing files)
+
+--write | -w     after extraction make ALL files in destination folder(s)
+                 user writable ( chmod -R u+rwX ) (ignored for user root)
+
+--list | -l      instead of extracting, list archive contents
+
+--listfile | -f  instead of extracting, list archive contents to a text file
+
+-a DIR           extract to directory DIR using auto-named subfolders
+
+-c DIR | -C DIR  extract all archives to combined directory DIR (overwrites
+                 existing files)
+
+-n               no gui - do not use zenity for prompts, lists or errors
+
+NOTE: Pressing the Cancel button in the progress dialog does NOT cancel
+      extraction.
+
+Instructions and updates:
+http://igurublog.wordpress.com/downloads/script-xtract/
+
+EOF
+	exit
+}
+
+if [ "$1" = "" ]; then
+	help
+fi
+
+# parse command line
+arccnt=0
+argsneeded=1
+while [ "$1" != "" ]; do
+	if [ "${1:0:1}" = "-" ]; then
+		case "$1" in
+			--help )
+				help
+				;;
+			--inter | --combine ) # --inter backwards compat
+				inter=1
+				;;
+			--inter-name | --intername | --ask )
+				inter=1
+				namedir=1
+				;;
+			--write )
+				write=1
+				;;
+			--list )
+				list=1
+				;;
+			--listfile )
+				listfile=1
+				;;
+			--* )
+				echo "xtract: Unknown option $1" 1>&2
+				exit 1
+				;;
+			-* )
+				o="${1:1}"
+				while [ "$o" != "" ]; do
+					case "${o:0:1}" in
+						w )
+							write=1;;
+						n )
+							nogui=1;;
+						l )
+							list=1
+							;;
+						f )
+							listfile=1;;
+						a )
+							if [ "$2" = "" ] || [ "${2:0:1}" = "-" ]; then
+								echo "xtract: Option -${o:0:1} requires an argument" 1>&2
+								exit 1
+							fi
+							askdir="$(readlink -m "$2")"
+							if [ ! -d "$askdir" ]; then
+								echo "xtract: directory $askdir not found" 1>&2
+								exit 1
+							fi
+							inter=1
+							namedir=1
+							shift
+							;;
+						c | C )
+							if [ "$2" = "" ] || [ "${2:0:1}" = "-" ]; then
+								echo "xtract: Option -${o:0:1} requires an argument" 1>&2
+								exit 1
+							fi
+							combinedir="$(readlink -m "$2")"
+							if [ ! -d "$combinedir" ]; then
+								echo "xtract: directory $combinedir not found" 1>&2
+								exit 1
+							fi
+							inter=1
+							shift
+							;;
+						h )
+							help
+							exit
+							;;
+						* )
+							echo "xtract: Unknown option -${o:0:1}" 1>&2
+							exit 1
+							;;
+					esac
+					o="${o:1}"
+				done
+				;;
+		esac
+	else
+		if [ -f "$1" ]; then
+			arc[$arccnt]="$1"
+			(( arccnt += 1 ))
+		else
+			echo "xtract: Missing or invalid file $1" 1>&2
+		fi
+	fi
+	shift
+done
+
+if (( arccnt == 0 )); then
+	help
+fi
+
+curuser="$(whoami)"
+olddir=`pwd`
+f="${arc[0]}"
+arcdirdef="$(readlink -m "$(dirname "$f")")"
+
+# Need write permission?
+if [ "$askdir" != "" ]; then
+	arcdir="$askdir"
+elif [ "$combinedir" != "" ]; then
+	arcdir="$combinedir"
+else
+	if (( inter != 1 )); then
+		if (( listfile == 1 )) || (( list + listfile == 0 )); then
+			if [ ! -w "$arcdirdef" ] || [ ! -x "$arcdirdef" ]; then
+				echo "xtract: No write permission in $arcdirdef" 1>&2
+				inter=1
+				namedir=1
+				if (( nogui == 1 )); then
+					exit 1
+				fi
+			fi
+		fi
+	fi
+	if (( inter == 1 )); then
+		if (( nogui == 1 )); then
+			echo "xtract: no-gui mode is incompatible with --ask and --combine" 1>&2
+			echo "        use -a DIR or -c DIR instead" 1>&2
+			exit 1
+		fi
+		# interactive
+		if (( list + listfile > 0 )); then
+			namedir=1
+		fi
+		if (( namedir == 1 )); then
+			par=" parent"
+		fi
+		arcdir=`zenity --title "xtract - Choose destination$par" --file-selection --directory --filename "$arcdirdef/"`
+		if [ $? != 0 ] || [ "$arcdir" = "" ]; then
+			exit
+		fi
+	fi
+fi
+
+chnamedir() 
+{
+	if (( namedir == 1 )); then
+		dname="$(basename "$f")"
+		for ext in .gz .bz2 .7z .xz .txz .tgz .zip .ZIP .rar .RAR .iso .ISO .tar; do
+			dname="$(basename "$dname" $ext)"
+		done
+		adir="$arcdir/$dname"
+		if [ -e "$adir" ]; then
+			copynum=2
+			while [ -e "$arcdir/$dname-copy$copynum" ]; do
+				(( copynum += 1 ))
+			done
+			adir="$arcdir/$dname-copy$copynum"
+		fi
+	else
+		adir="$arcdir"
+	fi
+
+	mkdir -p "$adir"
+	cd "$adir"
+	if [ $? != 0 ] || [ ! -d "$adir" ]; then
+		kill $zpid > /dev/null 2> /dev/null
+		if (( nogui == 1 )); then
+			echo "xtract: Cannot access directory $adir" 1>&2
+		else
+			zenity --error --text "Cannot access directory $adir" &
+		fi
+		cd "$olddir"
+		exit 2
+	fi
+}
+
+isomount()   # $1=FILE or blank for unmount
+{
+	if [ "$1" != "" ]; then
+		# Mount
+		
+		# Is mountiso available?
+		mntcmd=""
+		for testcmd in mountiso /usr/bin/mountiso /usr/local/bin/mountiso /opt/scripts/mountiso; do
+			test=`$testcmd --help 2> /dev/null | grep "igurublog.wordpress.com"`
+			if [ "$test" != "" ]; then
+				mntcmd="$testcmd"
+				break
+			fi
+		done
+
+		# something already mounted on mountiso mountpoint?
+		if [ "$mntcmd" != "" ]; then	
+			test=`$testcmd --help | grep "# unmounts " | sed 's/.* # unmounts \(.*\)/\1/'`
+			if [ "$test" = "" ]; then
+				#echo "could not determine mountiso mount point - using sudo mount"
+				mntcmd=""
+			else
+				mntpt="$test"
+				test=`mount | grep " [a-z]* $mntpt "`
+				if [ "$test" != "" ]; then
+					#echo "mountiso already mounted - using sudo mount"
+					mntcmd=""
+					mntpt=""
+				fi
+			fi
+		#else
+			#echo "mountiso not available - using sudo mount"
+		fi
+		# Is mountiso configured?
+		if [ "$mntcmd" != "" ]; then
+			test=`$mntcmd 2>&1 | grep "system is not setup for non-root user"`
+			if [ "$test" != "" ]; then
+				#echo "mountiso not configured - using sudo mount"
+				mntcmd=""
+			fi
+		fi
+
+		if [ "$mntcmd" != "" ]; then
+			# mount using mountiso
+			$mntcmd "$1"			
+			tempmount="$mntpt"
+		else
+			# mount using sudo mount
+			if [ ! -d "$tempmount" ]; then
+				eval $sucmd \'mkdir -p "$tempmount"\'
+			fi
+			eval $sucmd \'mount -o loop,ro "$1" "$tempmount"\'
+		fi
+		test=`mount | grep " [a-z]* $tempmount "`
+		if [ "$test" = "" ]; then
+			echo "ISO mount failed"
+			return 2
+		fi
+	else
+		# Unmount
+		if [ "$mntcmd" = "" ]; then
+			eval $sucmd \'umount "$tempmount"\'
+			eval $sucmd \'rmdir "$tempmount"\'
+		else
+			$mntcmd
+		fi
+	fi
+	return 0
+}
+
+arcx=0
+while (( arcx < arccnt )); do
+	f="${arc[$arcx]}"
+	f="$(readlink -m "$f")"
+	if (( inter != 1 )); then
+		# non-interactive
+		arcdir="$(dirname "$f")"
+		namedir=1
+	fi
+	# extract
+	fnlen=${#f}
+	(( l3 = fnlen - 3 ))
+	(( l4 = fnlen - 4 ))
+	(( l7 = fnlen - 7 ))
+	(( l8 = fnlen - 8 ))
+	e3="${f:l3:3}"
+	e4="${f:l4:4}"
+	e7="${f:l7:7}"
+	e8="${f:l8:8}"
+	zip=""
+	mntcmd=""
+	if (( list + listfile == 0 )); then
+		# Extract
+		if (( nogui == 1 )); then
+			echo "Extracting $(basename "$f") ..." 1>&2
+		else
+			zenity --progress --text "Extracting $(basename "$f") ..." &
+			zpid=$!
+		fi
+		if [ "$e7" = ".tar.gz" ] || [ "$e4" = ".tgz" ]; then
+			chnamedir
+			gzip -d < "$f" | tar xf -
+		elif [ "$e8" = ".tar.bz2" ]; then
+			chnamedir
+			bzip2 -d < "$f" | tar xf -
+		elif [ "$e4" = ".txz" ] || [ "$e7" = ".tar.xz" ]; then
+			chnamedir
+			xz -d < "$f" | tar xf -
+		elif [ "$e7" = ".tar.7z" ]; then
+			chnamedir
+			7za x -so "$f" | tar xf -
+			# To make test:
+			# tar cf - file1 file2 file3 | 7za a -si "archivename.tar.7z"
+		elif [ "$e3" = ".7z" ]; then
+			chnamedir
+			7za x "$f"
+			# To make test:
+			# 7za a "archivename.7z" file1 file2 file3
+		elif [ "$e4" = ".zip" ] || [ "$e4" = ".ZIP" ]; then
+			chnamedir
+			unzip -o "$f"
+		elif [ "$e4" = ".rar" ] || [ "$e4" = ".RAR" ]; then
+			chnamedir
+			unrar -o+ -p- e "$f"
+		elif [ "$e4" = ".iso" ] || [ "$e4" = ".ISO" ]; then
+			isomount "$f"
+			err=$?
+			if [ $err != 0 ]; then
+				if [ $err != 255 ]; then
+					if (( nogui == 1 )); then
+						echo "xtract: Error mounting $(basename "$f")" 1>&2
+					else
+						zenity --error --text "Error mounting $(basename "$f")" &	
+					fi
+				fi
+			else
+				chnamedir
+				cp -aRf $tempmount/.[a-zA-Z0-9]* ./ 2> /dev/null
+				cp -aRf $tempmount/* ./
+				if [ $? != 0 ]; then
+					if (( nogui == 1 )); then
+						echo "xtract: Error extracting $(basename "$f")" 1>&2
+					else
+						zenity --error --text "Error extracting $(basename "$f")" &
+					fi
+				fi
+			fi
+			test=`mount | grep " [a-z]* $tempmount "`
+			if [ "$test" != "" ]; then
+				isomount
+			fi
+		elif [ "$e3" = ".gz" ]; then
+			chnamedir
+			gzip -d < "$f" > "$(basename "$f" .gz)"
+		elif [ "$e3" = "bz2" ]; then
+			chnamedir
+			bzip2 -d < "$f" > "$(basename "$f" .bz2)"
+		elif [ "$e3" = ".xz" ]; then
+			chnamedir
+			xz -d < "$f" > "$(basename "$f" .xz)"
+		elif [ "$e4" = ".tar" ]; then
+			chnamedir
+			tar xf "$f"
+		else
+			if (( nogui == 1 )); then
+				echo "xtract: Unrecognized extension: $(basename "$f")" 1>&2
+			else
+				zenity --error --text "Unrecognized extension: $(basename "$f")" &
+			fi
+		fi
+		if (( nogui != 1 )); then
+			kill $zpid > /dev/null 2> /dev/null
+			zpid=""
+		fi
+	else
+		# List Contents
+		zenw=800
+		zenh=600
+		if (( listfile == 1 )); then
+			if (( nogui == 1 )); then
+				echo "Listing contents $(basename "$f") ..." 1>&2
+			else
+				zenity --progress --text "Listing contents $(basename "$f") ..." &
+				zpid=$!
+			fi
+			dname="$(basename "$f")"
+			adir="$arcdir/$dname.list"
+			if [ -e "$adir" ]; then
+				copynum=2
+				while [ -e "$arcdir/$dname-listcopy$copynum.list" ]; do
+					(( copynum += 1 ))
+				done
+				adir="$arcdir/$dname-listcopy$copynum.list"
+			fi
+			listfn="$adir"
+		fi
+		if [ "$e7" = ".tar.gz" ] || [ "$e4" = ".tgz" ]; then
+			if (( listfile == 1 )); then
+				gzip -d < "$f" | tar tvf - > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					gzip -d < "$f" | tar tvf -
+				else
+					gzip -d < "$f" | tar tvf - | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		elif [ "$e8" = ".tar.bz2" ]; then
+			if (( listfile == 1 )); then
+				bzip2 -d < "$f" | tar tvf - > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					bzip2 -d < "$f" | tar tvf -
+				else
+					bzip2 -d < "$f" | tar tvf - | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		elif [ "$e4" = ".txz" ] || [ "$e7" = ".tar.xz" ]; then
+			if (( listfile == 1 )); then
+				xz -d < "$f" | tar tvf - > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					xz -d < "$f" | tar tvf -
+				else
+					xz -d < "$f" | tar tvf - | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		elif [ "$e7" = ".tar.7z" ]; then
+			if (( listfile == 1 )); then
+				7za x -so "$f" | tar tvf - > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					7za x -so "$f" | tar tvf -
+				else
+					7za x -so "$f" | tar tvf - | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		elif [ "$e3" = ".7z" ]; then
+			if (( listfile == 1 )); then
+				7za l "$f" > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					7za l "$f"
+				else
+					7za l "$f" | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		elif [ "$e4" = ".zip" ] || [ "$e4" = ".ZIP" ]; then
+			if (( listfile == 1 )); then
+				unzip -v "$f" > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					unzip -v "$f"
+				else
+					unzip -v "$f" | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		elif [ "$e4" = ".rar" ] || [ "$e4" = ".RAR" ]; then
+			if (( listfile == 1 )); then
+				unrar lt "$f" > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					unrar lt "$f"
+				else
+					unrar lt "$f" | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		elif [ "$e4" = ".iso" ] || [ "$e4" = ".ISO" ]; then
+			isomount "$f"
+			err=$?
+			if [ "$err" != "0" ]; then
+				if [ "$err" != "255" ]; then
+					if (( nogui == 1 )); then
+						echo "xtract: Error mounting $(basename "$f")" 1>&2
+					else
+						zenity --error --text "Error mounting $(basename "$f")" &	
+					fi
+				fi
+			else
+				if (( listfile == 1 )); then
+					/bin/ls -hogRp --time-style="+%Y-%m-%d" "$tempmount/"  | awk ' BEGIN{FS=" ";} {if ( $5 != "" ) {$1=$4; $2=$3"\t"; $3=$5; $4=""; $5=""}; print}' > "$listfn"
+				fi
+				if (( list == 1 )); then
+					if (( nogui == 1 )); then
+						/bin/ls -hogRp --time-style="+%Y-%m-%d" "$tempmount/"  | awk ' BEGIN{FS=" ";} {if ( $5 != "" ) {$1=$4; $2=$3"\t"; $3=$5; $4=""; $5=""}; print}'
+					else
+						/bin/ls -hogRp --time-style="+%Y-%m-%d" "$tempmount/"  | awk ' BEGIN{FS=" ";} {if ( $5 != "" ) {$1=$4; $2=$3"\t"; $3=$5; $4=""; $5=""}; print}' | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+					fi
+				fi
+				if [ $? != 0 ]; then
+					if (( nogui == 1 )); then
+						echo "xtract: Error extracting $(basename "$f")" 1>&2
+					else
+						zenity --error --text "Error extracting $(basename "$f")" &
+					fi
+				fi
+			fi
+			test=`mount | grep " [a-z]* $tempmount "`
+			if [ "$test" != "" ]; then
+				isomount
+			fi
+		elif [ "$e4" = ".tar" ]; then
+			if (( listfile == 1 )); then
+				tar tvf "$f" > "$listfn"
+			fi
+			if (( list == 1 )); then
+				if (( nogui == 1 )); then
+					tar tvf "$f"
+				else
+					tar tvf "$f" | zenity --text-info --title "Contents of $f" --width $zenw --height $zenh
+				fi
+			fi
+		else
+			if (( nogui == 1 )); then
+				echo "xtract: Unsupported archive extension: $(basename "$f")" 1>&2
+			else
+				zenity --error --title "List Contents Error" --text "Unsupported archive extension: $(basename "$f")" &
+			fi
+		fi	
+		if (( listfile == 1 )) && (( nogui != 1 )); then
+			kill $zpid > /dev/null 2> /dev/null
+		fi
+	fi
+	if [ $? != 0 ]; then
+		if (( nogui == 1 )); then
+			echo "xtract: Error extracting $(basename "$f")" 1>&2
+		else
+			zenity --error --text "Error extracting $(basename "$f")" &	
+		fi
+	fi
+	if (( write == 1 )) && [ "$curuser" != "root" ] && (( list + listfile == 0 )); then
+		# Note: may change permissions of files not in archive
+		chmod -R --preserve-root u+rwX ./* 2> /dev/null
+	fi
+	(( arcx += 1 ))
+done
+
+cd "$olddir"
+
+exit
+
+# CHANGELOG:
+# 1.1.0: added options for non-gui use
+# 1.0.4: corrected to handle relative paths
+# 1.0.3: added mountiso support
+# 1.0.2: minor changes to ISO mounting
+# 1.0.1: Added --list and --listfile
+
