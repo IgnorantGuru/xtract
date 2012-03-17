@@ -2,6 +2,7 @@ README for xtract
 
 
 OVERVIEW
+========
 
 Designed for file manager integration, xtract decompresses and extracts
 archives, and can also list archive contents. By default, an archive is
@@ -12,19 +13,26 @@ Homepage & Instructions:
     http://igurublog.wordpress.com/downloads/script-xtract/
 
 Downloads:
-    https://github.com/IgnorantGuru/xtract
+    https://github.com/IgnorantGuru/xtract/tags
     https://github.com/IgnorantGuru/xtract/tree/master/packages
 
 Debian/Ubuntu PPA:
     http://igurublog.wordpress.com/downloads/ppa/
 
+Bug Reports:
+    https://github.com/IgnorantGuru/xtract/issues
+
 
 INSTALLATION
+============
 
 To install:
 
     wget https://github.com/IgnorantGuru/xtract/raw/master/xtract
     sudo install xtract /usr/local/bin/xtract
+
+xtract also REQUIRES: zenity
+xtract recommends:    gzip xz-utils unzip bzip2 p7zip unrar sudo gksu
 
 To remove:
     
@@ -32,6 +40,7 @@ To remove:
 
 
 LICENSE
+=======
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
