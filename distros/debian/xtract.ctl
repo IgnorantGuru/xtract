@@ -9,3 +9,4 @@ Copyright: COPYING
 Changelog: changelog
 Readme: README
 Suggests: zenity, xz-utils, unzip, bzip2, p7zip, unrar, sudo, gksu
+Files: xtract /usr/bin/
